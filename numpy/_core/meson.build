@@ -827,6 +827,14 @@ foreach gen_mtargets : [
       VXE, VX
     ]
   ],
+  [
+    'highway_argfunc.dispatch.h',
+    'src/multiarray/highway_argfunc.dispatch.cpp',
+    use_highway ? [
+      X86_V4, X86_V3, X86_V2,
+      SVE, ASIMD, NEON
+    ] : []
+  ],
 ]
   mtargets = mod_features.multi_targets(
     gen_mtargets[0], multiarray_gen_headers + gen_mtargets[1],
@@ -842,7 +850,8 @@ foreach gen_mtargets : [
       'src/multiarray',
       'src/multiarray/stringdtype',
       'src/npymath',
-      'src/umath'
+      'src/umath',
+      'src/highway',
     ]
   )
   if not is_variable('multiarray_umath_mtargets')
@@ -876,7 +885,7 @@ foreach gen_mtargets : [
     'highway_qsort.dispatch.h',
     'src/npysort/highway_qsort.dispatch.cpp',
     use_highway ? [
-      ASIMD, VSX2,  # FIXME: disable VXE due to runtime segfault
+      SVE, ASIMD, VSX2,  # FIXME: disable VXE due to runtime segfault
     ] : []
   ],
   [

@@ -3200,20 +3200,6 @@ static int
 
 /**end repeat**/
 
-static int
-BOOL_argmin(npy_bool *ip, npy_intp n, npy_intp *min_ind,
-            PyArrayObject *NPY_UNUSED(aip))
-
-{
-    npy_bool * p = memchr(ip, 0, n * sizeof(*ip));
-    if (p == NULL) {
-        *min_ind = 0;
-        return 0;
-    }
-    *min_ind = p - ip;
-    return 0;
-}
-
 /**begin repeat
  *
  * #fname = HALF, CFLOAT, CDOUBLE, CLONGDOUBLE,
@@ -4532,6 +4518,7 @@ set_typeinfo(PyObject *dict)
 
     // SIMD runtime dispatching
     #include "argfunc.dispatch.h"
+    #include "highway_argfunc.dispatch.h"
     /**begin repeat
      * #FROM = BYTE, UBYTE, SHORT, USHORT, INT, UINT,
      *         LONG, ULONG, LONGLONG, ULONGLONG,
@@ -4552,6 +4539,8 @@ set_typeinfo(PyObject *dict)
     /**end repeat**/
     NPY_CPU_DISPATCH_CALL_XB(_PyBool_ArrFuncs.argmax = (PyArray_ArgFunc*)BOOL_argmax);
     NPY_CPU_DISPATCH_TRACE("argmax", "?");
+    NPY_CPU_DISPATCH_CALL_XB(_PyBool_ArrFuncs.argmin = (PyArray_ArgFunc*)BOOL_argmin);
+    NPY_CPU_DISPATCH_TRACE("argmin", "?");
     /*
      * Override the base class for all types, eventually all of this logic
      * should be defined on the class and inherited to the scalar.
