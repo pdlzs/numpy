@@ -112,8 +112,13 @@ inline bool aquicksort_dispatch(T *start, npy_intp* arg, npy_intp num)
 #if !defined(__CYGWIN__)
     using TF = typename np::meta::FixedWidth<T>::Type;
     void (*dispfunc)(TF*, npy_intp*, npy_intp) = nullptr;
+#if defined(NPY_CPU_AMD64) || defined(NPY_CPU_X86) // x86 32-bit and 64-bit
     #include "x86_simd_argsort.dispatch.h"
     NPY_CPU_DISPATCH_CALL_XB(dispfunc = np::qsort_simd::template ArgQSort, <TF>);
+#else
+    #include "highway_qsort.dispatch.h"
+    NPY_CPU_DISPATCH_CALL_XB(dispfunc = np::highway::qsort_simd::template ArgQSort, <TF>);
+#endif
     if (dispfunc) {
         (*dispfunc)(reinterpret_cast<TF*>(start), arg, num);
         return true;

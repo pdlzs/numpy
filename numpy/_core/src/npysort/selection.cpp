@@ -26,6 +26,7 @@
 #include <cstdlib>
 #include <utility>
 #include "x86_simd_qsort.hpp"
+#include "highway_qsort.hpp"
 
 #define NOT_USED NPY_UNUSED(unused)
 #define DISABLE_HIGHWAY_OPTIMIZATION (defined(__arm__) || defined(__aarch64__))
@@ -72,9 +73,14 @@ inline bool argquickselect_dispatch(T* v, npy_intp* arg, npy_intp num, npy_intp 
         (std::is_integral_v<T> || std::is_floating_point_v<T>) &&
         (sizeof(T) == sizeof(uint32_t) || sizeof(T) == sizeof(uint64_t))) {
         using TF = typename np::meta::FixedWidth<T>::Type;
-        #include "x86_simd_argsort.dispatch.h"
         void (*dispfunc)(TF*, npy_intp*, npy_intp, npy_intp) = nullptr;
+#if defined(NPY_CPU_AMD64) || defined(NPY_CPU_X86) // x86 32-bit and 64-bit
+        #include "x86_simd_argsort.dispatch.h"
         NPY_CPU_DISPATCH_CALL_XB(dispfunc = np::qsort_simd::template ArgQSelect, <TF>);
+#else
+        #include "highway_qsort.dispatch.h"
+        NPY_CPU_DISPATCH_CALL_XB(dispfunc = np::highway::qsort_simd::template ArgQSelect, <TF>);
+#endif
         if (dispfunc) {
             (*dispfunc)(reinterpret_cast<TF*>(v), arg, num, kth);
             return true;
