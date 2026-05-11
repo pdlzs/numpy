@@ -9,6 +9,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <utility>
+#include <vector>
 
 #include "common.hpp"
 
@@ -49,6 +50,11 @@ template void NPY_CPU_DISPATCH_CURFX(QSelect)<double>(double*, npy_intp, npy_int
 
 namespace {
 
+/*
+ * Threshold for using insertion sort vs Highway SIMD.
+ * Determined empirically: insertion sort is faster for small arrays
+ * due to SIMD setup overhead. Value based on x86/ARM benchmarks.
+ */
 constexpr npy_intp kSmallArgSort = 64;
 
 template <typename T>
@@ -78,55 +84,73 @@ void ArgInsertionSort(T *arr, npy_intp *arg, npy_intp size)
     }
 }
 
+/*
+ * ArgInsertionSelect: Performs selection (not full sort).
+ * Only ensures the kth element is in its correct position,
+ * with elements before kth being smaller and after being larger.
+ */
 template <typename T>
 void ArgInsertionSelect(T *arr, npy_intp *arg, npy_intp num, npy_intp kth)
 {
+    // Initialize indices
     for (npy_intp i = 0; i < num; ++i) {
         arg[i] = i;
     }
-    for (npy_intp *pi = arg + 1; pi < arg + num; ++pi) {
-        npy_intp vi = *pi;
-        npy_intp *pj = pi;
-        while (pj > arg && ArgLess<T>(arr, vi, *(pj - 1))) {
-            *pj = *(pj - 1);
-            --pj;
+    // Selection: find and place the kth smallest element
+    // Elements 0..kth-1 will be smaller, kth+1..num-1 larger or equal
+    for (npy_intp i = 0; i <= kth; ++i) {
+        npy_intp min_idx = i;
+        for (npy_intp j = i + 1; j < num; ++j) {
+            if (ArgLess<T>(arr, arg[j], arg[min_idx])) {
+                min_idx = j;
+            }
         }
-        *pj = vi;
+        if (min_idx != i) {
+            std::swap(arg[i], arg[min_idx]);
+        }
     }
 }
 
+/*
+ * ToSortableKey: Converts values to unsigned types for SIMD sorting.
+ * Ensures proper ordering: negative < positive, NaNs go to end.
+ * Returns uint64_t for consistency (32-bit types truncated).
+ */
 template <typename T>
-inline auto ToSortableKey(T val)
+inline uint64_t ToSortableKey(T val)
 {
-    if constexpr (std::is_same_v<T, uint32_t> || std::is_same_v<T, uint64_t>) {
-        return val; // 直接返回
+    if constexpr (std::is_same_v<T, uint32_t>) {
+        return static_cast<uint64_t>(val);
+    }
+    else if constexpr (std::is_same_v<T, uint64_t>) {
+        return val;
     }
     else if constexpr (std::is_same_v<T, int32_t>) {
-        return static_cast<uint32_t>(val) ^ 0x80000000U;
+        return static_cast<uint64_t>(static_cast<uint32_t>(val) ^ 0x80000000U);
     }
     else if constexpr (std::is_same_v<T, int64_t>) {
         return static_cast<uint64_t>(val) ^ 0x8000000000000000ULL;
     }
     else if constexpr (std::is_same_v<T, float>) {
         if (std::isnan(val)) {
-            return uint32_t{0xFFFFFFFFU}; // 显式转换为 uint32_t
+            return 0xFFFFFFFFFFFFFFFFULL; // NaN at end (use 64-bit max for consistency)
         }
         uint32_t u = BitCast<uint32_t, T>(val);
-        if (u & 0x80000000U) {            // 负数（包括 -0.0）
-            return uint32_t{~u};           // 显式转换为 uint32_t
-        } else {                           // 非负数（+0.0, 正数, +inf）
-            return uint32_t{u | 0x80000000U};
+        if (u & 0x80000000U) {            // Negative (including -0.0)
+            return static_cast<uint64_t>(~u);
+        } else {                           // Non-negative (+0.0, positive, +inf)
+            return static_cast<uint64_t>(u | 0x80000000U);
         }
     }
     else if constexpr (std::is_same_v<T, double>) {
         if (std::isnan(val)) {
-            return uint64_t{0xFFFFFFFFFFFFFFFFULL}; // 显式转换为 uint64_t
+            return 0xFFFFFFFFFFFFFFFFULL; // NaN at end
         }
         uint64_t u = BitCast<uint64_t, T>(val);
-        if (u & 0x8000000000000000ULL) {   // 负数
-            return uint64_t{~u};            // 显式转换为 uint64_t
-        } else {                            // 非负数
-            return uint64_t{u | 0x8000000000000000ULL};
+        if (u & 0x8000000000000000ULL) {   // Negative
+            return ~u;
+        } else {                            // Non-negative
+            return u | 0x8000000000000000ULL;
         }
     }
 }
@@ -153,17 +177,20 @@ void ArgQSelect_Fallback(T *arr, npy_intp* arg, npy_intp num, npy_intp kth)
     });
 }
 
-} // anonymous namespace
-
+/*
+ * CheckSortedReversed: Checks if array is already sorted or reverse sorted.
+ * Returns true if special case handled (arg initialized accordingly).
+ * Only meaningful for full sort, not for select.
+ */
 template <typename T>
-void ArgQSort_Impl(T *arr, npy_intp* arg, npy_intp size)
+inline bool CheckSortedReversed(T *arr, npy_intp size, npy_intp *arg)
 {
     if (size <= 1) {
         if (size == 1) arg[0] = 0;
-        return;
+        return true;
     }
 
-    // Early exit for already sorted arrays (ordered case)
+    // Check for already sorted arrays
     bool is_sorted = true;
     for (npy_intp i = 1; i < size; ++i) {
         if (ArgLess<T>(arr, i, i - 1)) {
@@ -175,10 +202,10 @@ void ArgQSort_Impl(T *arr, npy_intp* arg, npy_intp size)
         for (npy_intp i = 0; i < size; ++i) {
             arg[i] = i;
         }
-        return;
+        return true;
     }
 
-    // Early exit for reverse sorted arrays (reversed case)
+    // Check for reverse sorted arrays
     bool is_reversed = true;
     for (npy_intp i = 1; i < size; ++i) {
         if (!ArgLess<T>(arr, i, i - 1)) {
@@ -190,6 +217,19 @@ void ArgQSort_Impl(T *arr, npy_intp* arg, npy_intp size)
         for (npy_intp i = 0; i < size; ++i) {
             arg[i] = size - 1 - i;
         }
+        return true;
+    }
+
+    return false;
+}
+
+} // anonymous namespace
+
+template <typename T>
+void ArgQSort_Impl(T *arr, npy_intp* arg, npy_intp size)
+{
+    // Early exit for sorted/reversed arrays (optimization for sort)
+    if (CheckSortedReversed<T>(arr, size, arg)) {
         return;
     }
 
@@ -200,35 +240,26 @@ void ArgQSort_Impl(T *arr, npy_intp* arg, npy_intp size)
 
 #if VQSORT_ENABLED
     if constexpr (std::is_same_v<T, int32_t> || std::is_same_v<T, uint32_t> || std::is_same_v<T, float>) {
-        auto *pairs = static_cast<hwy::K32V32*>(std::malloc(size * sizeof(hwy::K32V32)));
-        if (!pairs) {
-            ArgQSort_Fallback(arr, arg, size);
-            return;
-        }
+        // Use std::vector for RAII memory management
+        std::vector<hwy::K32V32> pairs(size);
         for (npy_intp i = 0; i < size; ++i) {
-            pairs[i].key = ToSortableKey(arr[i]);
+            pairs[i].key = static_cast<uint32_t>(ToSortableKey(arr[i]));
             pairs[i].value = static_cast<uint32_t>(i);
         }
-        hwy::HWY_NAMESPACE::VQSortStatic(pairs, static_cast<size_t>(size), hwy::SortAscending());
+        hwy::HWY_NAMESPACE::VQSortStatic(pairs.data(), static_cast<size_t>(size), hwy::SortAscending());
         for (npy_intp i = 0; i < size; ++i) {
             arg[i] = static_cast<npy_intp>(pairs[i].value);
         }
-        std::free(pairs);
     } else {
-        auto *pairs = static_cast<hwy::K64V64*>(std::malloc(size * sizeof(hwy::K64V64)));
-        if (!pairs) {
-            ArgQSort_Fallback(arr, arg, size);
-            return;
-        }
+        std::vector<hwy::K64V64> pairs(size);
         for (npy_intp i = 0; i < size; ++i) {
             pairs[i].key = ToSortableKey(arr[i]);
             pairs[i].value = static_cast<uint64_t>(i);
         }
-        hwy::HWY_NAMESPACE::VQSortStatic(pairs, static_cast<size_t>(size), hwy::SortAscending());
+        hwy::HWY_NAMESPACE::VQSortStatic(pairs.data(), static_cast<size_t>(size), hwy::SortAscending());
         for (npy_intp i = 0; i < size; ++i) {
             arg[i] = static_cast<npy_intp>(pairs[i].value);
         }
-        std::free(pairs);
     }
 #else
     ArgQSort_Fallback(arr, arg, size);
@@ -238,38 +269,11 @@ void ArgQSort_Impl(T *arr, npy_intp* arg, npy_intp size)
 template <typename T>
 void ArgQSelect_Impl(T *arr, npy_intp* arg, npy_intp num, npy_intp kth)
 {
+    // Note: For select operation, we cannot use sorted/reversed optimization
+    // because we need to find the kth element position, not just initialize indices
+
     if (num <= 1) {
         if (num == 1) arg[0] = 0;
-        return;
-    }
-
-    // Early exit for already sorted arrays (ordered case)
-    bool is_sorted = true;
-    for (npy_intp i = 1; i < num; ++i) {
-        if (ArgLess<T>(arr, i, i - 1)) {
-            is_sorted = false;
-            break;
-        }
-    }
-    if (is_sorted) {
-        for (npy_intp i = 0; i < num; ++i) {
-            arg[i] = i;
-        }
-        return;
-    }
-
-    // Early exit for reverse sorted arrays (reversed case)
-    bool is_reversed = true;
-    for (npy_intp i = 1; i < num; ++i) {
-        if (!ArgLess<T>(arr, i, i - 1)) {
-            is_reversed = false;
-            break;
-        }
-    }
-    if (is_reversed) {
-        for (npy_intp i = 0; i < num; ++i) {
-            arg[i] = num - 1 - i;
-        }
         return;
     }
 
@@ -280,35 +284,27 @@ void ArgQSelect_Impl(T *arr, npy_intp* arg, npy_intp num, npy_intp kth)
 
 #if VQSORT_ENABLED
     if constexpr (std::is_same_v<T, int32_t> || std::is_same_v<T, uint32_t> || std::is_same_v<T, float>) {
-        auto *pairs = static_cast<hwy::K32V32*>(std::malloc(num * sizeof(hwy::K32V32)));
-        if (!pairs) {
-            ArgQSelect_Fallback(arr, arg, num, kth);
-            return;
-        }
+        std::vector<hwy::K32V32> pairs(num);
         for (npy_intp i = 0; i < num; ++i) {
-            pairs[i].key = ToSortableKey(arr[i]);
+            pairs[i].key = static_cast<uint32_t>(ToSortableKey(arr[i]));
             pairs[i].value = static_cast<uint32_t>(i);
         }
-        hwy::HWY_NAMESPACE::VQSelectStatic(pairs, static_cast<size_t>(num), static_cast<size_t>(kth), hwy::SortAscending());
+        hwy::HWY_NAMESPACE::VQSelectStatic(pairs.data(), static_cast<size_t>(num),
+                                           static_cast<size_t>(kth), hwy::SortAscending());
         for (npy_intp i = 0; i < num; ++i) {
             arg[i] = static_cast<npy_intp>(pairs[i].value);
         }
-        std::free(pairs);
     } else {
-        auto *pairs = static_cast<hwy::K64V64*>(std::malloc(num * sizeof(hwy::K64V64)));
-        if (!pairs) {
-            ArgQSelect_Fallback(arr, arg, num, kth);
-            return;
-        }
+        std::vector<hwy::K64V64> pairs(num);
         for (npy_intp i = 0; i < num; ++i) {
             pairs[i].key = ToSortableKey(arr[i]);
             pairs[i].value = static_cast<uint64_t>(i);
         }
-        hwy::HWY_NAMESPACE::VQSelectStatic(pairs, static_cast<size_t>(num), static_cast<size_t>(kth), hwy::SortAscending());
+        hwy::HWY_NAMESPACE::VQSelectStatic(pairs.data(), static_cast<size_t>(num),
+                                           static_cast<size_t>(kth), hwy::SortAscending());
         for (npy_intp i = 0; i < num; ++i) {
             arg[i] = static_cast<npy_intp>(pairs[i].value);
         }
-        std::free(pairs);
     }
 #else
     ArgQSelect_Fallback(arr, arg, num, kth);
