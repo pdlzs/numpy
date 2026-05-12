@@ -115,7 +115,9 @@ if use_highway
       # required for hwy::Abort symbol
       'src/highway/hwy/abort.cc'
     ],
-    cpp_args: '-DTOOLCHAIN_MISS_ASM_HWCAP_H',
+    cpp_args: [
+      '-DTOOLCHAIN_MISS_ASM_HWCAP_H',
+    ],
     include_directories: ['src/highway'],
     install: false,
     gnu_symbol_visibility: 'hidden',
@@ -1245,6 +1247,9 @@ src_umath = umath_gen_headers + [
   'src/umath/string_ufuncs.cpp',
   'src/umath/stringdtype_ufuncs.cpp',
   'src/umath/wrapping_array_method.c',
+  # Highway SIMD floor divide for signed integers
+  'src/umath/loops_arithmetic_floor_hwy.cpp',
+  'src/umath/loops_arithmetic_floor_hwy.h',
   # For testing. Eventually, should use public API and be separate:
   'src/umath/_scaled_float_dtype.c',
 ]

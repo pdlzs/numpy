@@ -8,6 +8,8 @@
 #include "lowlevel_strided_loops.h"
 // Provides the various *_LOOP macros
 #include "fast_loop_macros.h"
+// Highway SIMD floor divide wrappers (callable from C)
+#include "loops_arithmetic_floor_hwy.h"
 
 //###############################################################################
 //## Division
@@ -378,24 +380,51 @@ NPY_NO_EXPORT void NPY_CPU_DISPATCH_CURFX(@TYPE@_divide)
             io1 = floor_div_@TYPE@(io1, *(@type@*)ip2);
         }
         *((@type@ *)iop1) = io1;
+        return;
     }
+
+    /*
+     * Fast paths for contiguous binary arrays:
+     * 1. VSX4 (Power10): native SIMD integer division (vec_div)
+     * 2. Highway: Granlund-Montgomery algorithm for other platforms
+     * 3. Scalar divisor optimization (NPY_SIMD scalar intrinsics)
+     * 4. Full scalar loop fallback
+     */
 #if NPY_SIMD && defined(TO_SIMD_SFX)
 #if defined(NPY_HAVE_VSX4)
-    // both arguments are arrays of the same size
-    else if (IS_BLOCKABLE_BINARY(sizeof(@type@), NPY_SIMD_WIDTH)) {
+    /* VSX4 (Power10): use native SIMD integer division */
+    if (IS_BLOCKABLE_BINARY(sizeof(@type@), NPY_SIMD_WIDTH)) {
         TO_SIMD_SFX(vsx4_simd_divide_contig)(args, dimensions[0]);
+        return;
     }
-#endif
-    // for contiguous block of memory, divisor is a scalar and not 0
-    else if (IS_BLOCKABLE_BINARY_SCALAR2(sizeof(@type@), NPY_SIMD_WIDTH) &&
-             (*(@type@ *)args[1]) != 0) {
-        TO_SIMD_SFX(simd_divide_by_scalar_contig)(args, dimensions[0]);
-    }
-#endif
-    else {
-        BINARY_LOOP {
-            *((@type@ *)op1) = floor_div_@TYPE@(*(@type@*)ip1, *(@type@*)ip2);
+#else
+    /* Highway SIMD floor divide for non-VSX4 platforms
+     * (BYTE, SHORT, INT only; LONG/LONGLONG fall through) */
+    if (IS_BLOCKABLE_BINARY(sizeof(@type@), NPY_SIMD_WIDTH) &&
+        npy_highway_floor_divide_available(sizeof(@type@))) {
+        if (sizeof(@type@) == 1) {
+            npy_highway_floor_divide_s8_contig(args, dimensions[0]);
         }
+        else if (sizeof(@type@) == 2) {
+            npy_highway_floor_divide_s16_contig(args, dimensions[0]);
+        }
+        else if (sizeof(@type@) == 4) {
+            npy_highway_floor_divide_s32_contig(args, dimensions[0]);
+        }
+        return;
+    }
+#endif
+    /* Scalar divisor optimization: contiguous array, scalar non-zero divisor */
+    if (IS_BLOCKABLE_BINARY_SCALAR2(sizeof(@type@), NPY_SIMD_WIDTH) &&
+        (*(@type@ *)args[1]) != 0) {
+        TO_SIMD_SFX(simd_divide_by_scalar_contig)(args, dimensions[0]);
+        return;
+    }
+#endif
+
+    /* Full scalar fallback loop */
+    BINARY_LOOP {
+        *((@type@ *)op1) = floor_div_@TYPE@(*(@type@*)ip1, *(@type@*)ip2);
     }
 }
 
