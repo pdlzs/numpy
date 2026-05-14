@@ -969,6 +969,14 @@ foreach gen_mtargets : [
     ] : []
   ],
   [
+    'loops_minmax_hwy.dispatch.h',
+    'src/umath/loops_minmax_hwy.dispatch.cpp',
+    use_highway ? [
+      X86_V4, X86_V3, X86_V2,
+      SVE, ASIMD, NEON
+    ] : []
+  ],
+  [
     'loops_comparison.dispatch.h',
     src_file.process('src/umath/loops_comparison.dispatch.c.src'),
     [
@@ -1265,6 +1273,9 @@ src_umath = umath_gen_headers + [
   # Highway SIMD complex maximum/minimum
   'src/umath/loops_complex_maxmin.dispatch.cpp',
   'src/umath/loops_complex_maxmin.h',
+  # Highway SIMD float/double maximum/minimum
+  'src/umath/loops_minmax_hwy_avail.c',
+  'src/umath/loops_minmax_hwy.h',
   # For testing. Eventually, should use public API and be separate:
   'src/umath/_scaled_float_dtype.c',
 ]

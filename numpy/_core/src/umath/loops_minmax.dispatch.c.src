@@ -8,6 +8,8 @@
 #include "lowlevel_strided_loops.h"
 // Provides the various *_LOOP macros
 #include "fast_loop_macros.h"
+// Highway SIMD maximum/minimum wrappers (callable from C)
+#include "loops_minmax_hwy.h"
 
 /*******************************************************************************
  ** Scalar intrinsics
@@ -95,6 +97,7 @@ NPY_FINLINE @type@ scalar_@op@_@c_sfx@(@type@ a, @type@ b) {
  * #simd_chk = NPY_SIMD*8, NPY_SIMD_F32, NPY_SIMD_F64#
  * #is_fp = 0*8, 1, 1#
  * #scalar_sfx = i*8, f, d#
+ * #is_simd = 0, 0, 0, 0, 1, 1, 1, 1, 1, 1#
  */
 /**begin repeat1
  * # intrin = max, min, maxp, minp#
@@ -218,7 +221,7 @@ simd_binary_ccc_@intrin@_@sfx@(const npyv_lanetype_@sfx@ *ip1, const npyv_lanety
     }
 }
 // non-contiguous for float 32/64-bit memory access
-#if @is_fp@ && !defined(NPY_HAVE_NEON)
+#if (!defined(NPY_HAVE_NEON) && @is_fp@) || (defined(__aarch64__) && @is_simd@)
 // unroll scalars faster than non-contiguous vector load/store on Arm
 static inline void
 simd_binary_@intrin@_@sfx@(const npyv_lanetype_@sfx@ *ip1, npy_intp sip1,
@@ -282,6 +285,7 @@ simd_binary_@intrin@_@sfx@(const npyv_lanetype_@sfx@ *ip1, npy_intp sip1,
  *
  * #is_fp = 0*10, 1*3#
  * #is_unsigned = 1*5, 0*5, 0*3#
+ * #is_simd = 0, 0, 1, 1, 1, 0, 0, 1, 1, 1, 1, 1, 1#
  * #scalar_sfx = i*10, f, d, l#
  */
 #undef TO_SIMD_SFX
@@ -337,6 +341,39 @@ NPY_NO_EXPORT void NPY_CPU_DISPATCH_CURFX(@TYPE@_@kind@)
         !is_mem_overlap(ip2, is2, op1, os1, len)
     ) {
         // no overlap and operands are binary contiguous
+#if !@is_fp@ && !@fp_only@
+#ifdef NPY_HAVE_HIGHWAY
+        // Highway SIMD max/min for integers (SVE vectorized)
+        if (IS_BINARY_CONT(@type@, @type@) &&
+            npy_highway_minmax_available(sizeof(@type@))) {
+            if (sizeof(@type@) == 1 && @is_unsigned@) {
+                npy_highway_@kind@_u8_contig(args, len);
+                goto clear_fp;
+            } else if (sizeof(@type@) == 1 && !@is_unsigned@) {
+                npy_highway_@kind@_s8_contig(args, len);
+                goto clear_fp;
+            } else if (sizeof(@type@) == 2 && @is_unsigned@) {
+                npy_highway_@kind@_u16_contig(args, len);
+                goto clear_fp;
+            } else if (sizeof(@type@) == 2 && !@is_unsigned@) {
+                npy_highway_@kind@_s16_contig(args, len);
+                goto clear_fp;
+            } else if (sizeof(@type@) == 4 && @is_unsigned@) {
+                npy_highway_@kind@_u32_contig(args, len);
+                goto clear_fp;
+            } else if (sizeof(@type@) == 4 && !@is_unsigned@) {
+                npy_highway_@kind@_s32_contig(args, len);
+                goto clear_fp;
+            } else if (sizeof(@type@) == 8 && @is_unsigned@) {
+                npy_highway_@kind@_u64_contig(args, len);
+                goto clear_fp;
+            } else if (sizeof(@type@) == 8 && !@is_unsigned@) {
+                npy_highway_@kind@_s64_contig(args, len);
+                goto clear_fp;
+            }
+        }
+#endif // NPY_HAVE_HIGHWAY
+#endif // !@is_fp@ && !@fp_only@
         if (IS_BINARY_CONT(@type@, @type@)) {
             TO_SIMD_SFX(simd_binary_ccc_@intrin@)(
                 (STYPE*)ip1, (STYPE*)ip2, (STYPE*)op1, len
@@ -344,7 +381,7 @@ NPY_NO_EXPORT void NPY_CPU_DISPATCH_CURFX(@TYPE@_@kind@)
             goto clear_fp;
         }
     // unroll scalars faster than non-contiguous vector load/store on Arm
-    #if !defined(NPY_HAVE_NEON) && @is_fp@
+    #if (!defined(NPY_HAVE_NEON) && @is_fp@) || (defined(__aarch64__) && @is_simd@)
         if (TO_SIMD_SFX(npyv_loadable_stride)(is1) &&
             TO_SIMD_SFX(npyv_loadable_stride)(is2) &&
             TO_SIMD_SFX(npyv_storable_stride)(os1)
@@ -407,25 +444,43 @@ NPY_NO_EXPORT void NPY_CPU_DISPATCH_CURFX(@TYPE@_@kind@)
 
              *((@type@ *)op1) = SCALAR_OP(*((@type@ *)op1), m0);
         }
-    } else{
-        // Note, 4x unroll was chosen for best results on Apple M1
-        npy_intp elemPerLoop = 4;
-        for(; (i+elemPerLoop)<=len; i+=elemPerLoop){
-            /* Note, we can't just load all, do all ops, then store all here.
-             * Sometimes ufuncs are called with `accumulate`, which makes the
-             * assumption that previous iterations have finished before next
-             * iteration.  For example, the output of iteration 2 depends on the
-             * result of iteration 1.
-             */
+    } else {
+        /*
+         * On ARM64, 8x unroll with npy_int promotion for < 32-bit integer
+         * types avoids redundant uxtb/sxth instructions and better fills
+         * the 31 GPR pipeline, reducing L1 pressure.
+         */
+        #if defined(__aarch64__) && !@is_fp@ && NPY_BITSOF_@BTYPE@ < 32
+            npy_intp elemPerLoop = 8;
+            for(; (i+elemPerLoop)<=len; i+=elemPerLoop){
+                /**begin repeat2
+                 * #unroll = 0, 1, 2, 3, 4, 5, 6, 7#
+                 */
+                npy_int v@unroll@ = *((@type@ *)(ip1 + (i + @unroll@) * is1));
+                npy_int u@unroll@ = *((@type@ *)(ip2 + (i + @unroll@) * is2));
+                *((@type@ *)(op1 + (i + @unroll@) * os1)) = SCALAR_OP(v@unroll@, u@unroll@);
+                /**end repeat2**/
+            }
+        #else
+            // Note, 4x unroll was chosen for best results on Apple M1
+            npy_intp elemPerLoop = 4;
+            for(; (i+elemPerLoop)<=len; i+=elemPerLoop){
+                /* Note, we can't just load all, do all ops, then store all here.
+                 * Sometimes ufuncs are called with `accumulate`, which makes the
+                 * assumption that previous iterations have finished before next
+                 * iteration.  For example, the output of iteration 2 depends on the
+                 * result of iteration 1.
+                 */
 
-            /**begin repeat2
-             * #unroll = 0, 1, 2, 3#
-             */
-            @type@ v@unroll@ = *((@type@ *)(ip1 + (i + @unroll@) * is1));
-            @type@ u@unroll@ = *((@type@ *)(ip2 + (i + @unroll@) * is2));
-            *((@type@ *)(op1 + (i + @unroll@) * os1)) = SCALAR_OP(v@unroll@, u@unroll@);
-            /**end repeat2**/
-        }
+                /**begin repeat2
+                 * #unroll = 0, 1, 2, 3#
+                 */
+                @type@ v@unroll@ = *((@type@ *)(ip1 + (i + @unroll@) * is1));
+                @type@ u@unroll@ = *((@type@ *)(ip2 + (i + @unroll@) * is2));
+                *((@type@ *)(op1 + (i + @unroll@) * os1)) = SCALAR_OP(v@unroll@, u@unroll@);
+                /**end repeat2**/
+            }
+        #endif
     }
 #endif // NPY_DISABLE_OPTIMIZATION
     ip1 += is1 * i;

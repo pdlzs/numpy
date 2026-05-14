@@ -326,16 +326,16 @@ NPY_CPU_DISPATCH_DECLARE_XB(void npy_highway_floor_divide_u16_contig,
 NPY_CPU_DISPATCH_DECLARE_XB(void npy_highway_floor_divide_u32_contig,
                             (char **args, npy_intp len));
 
-/* Dispatch macro for 8-bit: bypass NPY dispatch, use HWY_STATIC_DISPATCH                                                                
- * directly. On ARM64 (no SVE flags in baseline) this selects NEON/ASIMD. */                                                             
-#define FLOOR_DIVIDE_DISPATCH_8BIT(func_name, simd_func, scalar_type) \                                                                  
-NPY_VISIBILITY_HIDDEN void \                                                                                                             
-NPY_CPU_DISPATCH_CURFX(func_name)(char **args, npy_intp len) \                                                                           
-{ \                                                                                                                                      
-    HWY_STATIC_DISPATCH(simd_func)( \                                                                                                    
-        reinterpret_cast<const scalar_type *>(args[0]), \                                                                                
-        reinterpret_cast<const scalar_type *>(args[1]), \                                                                                
-        reinterpret_cast<scalar_type *>(args[2]), len); \                                                                                
+/* Dispatch macro for 8-bit: bypass NPY dispatch, use HWY_STATIC_DISPATCH
+ * directly. On ARM64 (no SVE flags in baseline) this selects NEON/ASIMD. */
+#define FLOOR_DIVIDE_DISPATCH_8BIT(func_name, simd_func, scalar_type) \
+NPY_VISIBILITY_HIDDEN void \
+NPY_CPU_DISPATCH_CURFX(func_name)(char **args, npy_intp len) \
+{ \
+    HWY_STATIC_DISPATCH(simd_func)( \
+        reinterpret_cast<const scalar_type *>(args[0]), \
+        reinterpret_cast<const scalar_type *>(args[1]), \
+        reinterpret_cast<scalar_type *>(args[2]), len); \
 } 
 
 #define FLOOR_DIVIDE_DISPATCH(func_name, simd_func, scalar_type) \
@@ -359,7 +359,7 @@ NPY_CPU_DISPATCH_CURFX(func_name)(char **args, npy_intp len) \
 /* 8-bit: baseline-only, bypasses SVE (too slow for narrow 8-bit types). 
  * On ARM64, HWY_STATIC_DISPATCH in the baseline selects NEON/ASIMD. */ 
 #ifndef NPY_MTARGETS_CURRENT  
-FLOOR_DIVIDE_DISPATCH_8BIT(npy_highway_floor_divide_s8_contig,                                                                           
+FLOOR_DIVIDE_DISPATCH_8BIT(npy_highway_floor_divide_s8_contig,
                            simd_floor_divide<int8_t>, int8_t)
 #endif
 FLOOR_DIVIDE_DISPATCH(npy_highway_floor_divide_s16_contig,
@@ -371,7 +371,7 @@ FLOOR_DIVIDE_DISPATCH(npy_highway_floor_divide_s32_contig,
 
 /* 8-bit unsigned: baseline-only, bypasses SVE (too slow for narrow types). */
 #ifndef NPY_MTARGETS_CURRENT        
-FLOOR_DIVIDE_DISPATCH_8BIT(npy_highway_floor_divide_u8_contig,                                                                           
+FLOOR_DIVIDE_DISPATCH_8BIT(npy_highway_floor_divide_u8_contig,
                            simd_floor_divide_unsigned<uint8_t>, uint8_t) 
 #endif
 

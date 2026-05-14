@@ -52,12 +52,12 @@ NPYV_IMPL_NEON_MEM(f64, double)
  ***************************/
 NPY_FINLINE npyv_s32 npyv_loadn_s32(const npy_int32 *ptr, npy_intp stride)
 {
-    int32x4_t a = vdupq_n_s32(0);
-    a = vld1q_lane_s32((const int32_t*)ptr,            a, 0);
-    a = vld1q_lane_s32((const int32_t*)ptr + stride,   a, 1);
-    a = vld1q_lane_s32((const int32_t*)ptr + stride*2, a, 2);
-    a = vld1q_lane_s32((const int32_t*)ptr + stride*3, a, 3);
-    return a;
+    npy_int32 tmp[4];
+    tmp[0] = ptr[0];
+    tmp[1] = ptr[stride];
+    tmp[2] = ptr[stride * 2];
+    tmp[3] = ptr[stride * 3];
+    return vld1q_s32((const int32_t *)tmp);
 }
 
 NPY_FINLINE npyv_u32 npyv_loadn_u32(const npy_uint32 *ptr, npy_intp stride)
