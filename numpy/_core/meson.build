@@ -716,6 +716,10 @@ c_args_common = [
   cflags_large_file_support,
 ]
 
+if use_highway
+  c_args_common += ['-DNPY_HAVE_HIGHWAY']
+endif
+
 # CPP exceptions are handled in the unique_hash code and therefore the `-fexceptions`
 # flag.
 unique_hash_cpp_args = c_args_common
@@ -950,11 +954,19 @@ foreach gen_mtargets : [
     src_file.process('src/umath/loops_arithmetic.dispatch.c.src'),
     [
       X86_V4, X86_V3, X86_V2,
-      NEON,
+      SVE, NEON,
       VSX4, VSX2,
       VX,
       LSX,
     ]
+  ],
+  [
+    'loops_arithmetic_floor_hwy.dispatch.h',
+    'src/umath/loops_arithmetic_floor_hwy.dispatch.cpp',
+    use_highway ? [
+      X86_V4, X86_V3, X86_V2,
+      SVE, ASIMD, NEON
+    ] : []
   ],
   [
     'loops_comparison.dispatch.h',
@@ -1247,8 +1259,8 @@ src_umath = umath_gen_headers + [
   'src/umath/string_ufuncs.cpp',
   'src/umath/stringdtype_ufuncs.cpp',
   'src/umath/wrapping_array_method.c',
-  # Highway SIMD floor divide for signed integers
-  'src/umath/loops_arithmetic_floor_hwy.cpp',
+  # Highway SIMD floor divide — availability check (non-dispatched)
+  'src/umath/loops_arithmetic_floor_hwy_avail.c',
   'src/umath/loops_arithmetic_floor_hwy.h',
   # For testing. Eventually, should use public API and be separate:
   'src/umath/_scaled_float_dtype.c',
