@@ -643,6 +643,7 @@ defdict = {
           'PyUFunc_SimpleUniformOperationTypeResolver',
           TD('?', cfunc_alias='logical_or', dispatch=[('loops_logical', '?')]),
           TD(no_obj_bool, dispatch=[('loops_minmax', ints + 'fdg')]),
+          TD(cmplx, cfunc_alias='maximum'),
           TD(O, f='npy_ObjectMax'),
           indexed=flts + ints,
           ),
@@ -653,6 +654,7 @@ defdict = {
           TD('?', cfunc_alias='logical_and',
                   dispatch=[('loops_logical', '?')]),
           TD(no_obj_bool, dispatch=[('loops_minmax', ints + 'fdg')]),
+          TD(cmplx, cfunc_alias='minimum'),
           TD(O, f='npy_ObjectMin'),
           indexed=flts + ints,
           ),
@@ -1596,6 +1598,7 @@ def make_code(funcdict, filename):
     #include "loops.h"
     #include "matmul.h"
     #include "clip.h"
+    #include "loops_complex_maxmin.h"
     #include "dtypemeta.h"
     #include "dispatching.h"
     #include "_umath_doc_generated.h"

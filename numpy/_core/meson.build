@@ -1262,6 +1262,9 @@ src_umath = umath_gen_headers + [
   # Highway SIMD floor divide — availability check (non-dispatched)
   'src/umath/loops_arithmetic_floor_hwy_avail.c',
   'src/umath/loops_arithmetic_floor_hwy.h',
+  # Highway SIMD complex maximum/minimum
+  'src/umath/loops_complex_maxmin.dispatch.cpp',
+  'src/umath/loops_complex_maxmin.h',
   # For testing. Eventually, should use public API and be separate:
   'src/umath/_scaled_float_dtype.c',
 ]
