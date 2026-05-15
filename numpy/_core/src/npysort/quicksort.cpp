@@ -112,13 +112,20 @@ inline bool aquicksort_dispatch(T *start, npy_intp* arg, npy_intp num)
 #if !defined(__CYGWIN__)
     using TF = typename np::meta::FixedWidth<T>::Type;
     void (*dispfunc)(TF*, npy_intp*, npy_intp) = nullptr;
+    if constexpr (sizeof(T) == sizeof(uint16_t)) {
+        // x86-simd-sort lacks 16-bit argsort, use Highway on all platforms
+        #include "highway_qsort_16bit.dispatch.h"
+        NPY_CPU_DISPATCH_CALL_XB(dispfunc = np::highway::qsort_simd::template ArgQSort, <TF>);
+    }
+    else if constexpr (sizeof(T) == sizeof(uint32_t) || sizeof(T) == sizeof(uint64_t)) {
 #if defined(NPY_CPU_AMD64) || defined(NPY_CPU_X86) // x86 32-bit and 64-bit
-    #include "x86_simd_argsort.dispatch.h"
-    NPY_CPU_DISPATCH_CALL_XB(dispfunc = np::qsort_simd::template ArgQSort, <TF>);
+        #include "x86_simd_argsort.dispatch.h"
+        NPY_CPU_DISPATCH_CALL_XB(dispfunc = np::qsort_simd::template ArgQSort, <TF>);
 #else
-    #include "highway_qsort.dispatch.h"
-    NPY_CPU_DISPATCH_CALL_XB(dispfunc = np::highway::qsort_simd::template ArgQSort, <TF>);
+        #include "highway_qsort.dispatch.h"
+        NPY_CPU_DISPATCH_CALL_XB(dispfunc = np::highway::qsort_simd::template ArgQSort, <TF>);
 #endif
+    }
     if (dispfunc) {
         (*dispfunc)(reinterpret_cast<TF*>(start), arg, num);
         return true;
@@ -884,12 +891,18 @@ NPY_NO_EXPORT int
 aquicksort_short(void *vv, npy_intp *tosort, npy_intp n,
                  void *NPY_UNUSED(varr))
 {
+    if (aquicksort_dispatch((npy_short *)vv, tosort, n)) {
+        return 0;
+    }
     return aquicksort_<npy::short_tag>((npy_short *)vv, tosort, n);
 }
 NPY_NO_EXPORT int
 aquicksort_ushort(void *vv, npy_intp *tosort, npy_intp n,
                   void *NPY_UNUSED(varr))
 {
+    if (aquicksort_dispatch((npy_ushort *)vv, tosort, n)) {
+        return 0;
+    }
     return aquicksort_<npy::ushort_tag>((npy_ushort *)vv, tosort, n);
 }
 NPY_NO_EXPORT int
@@ -946,6 +959,9 @@ aquicksort_ulonglong(void *vv, npy_intp *tosort, npy_intp n,
 NPY_NO_EXPORT int
 aquicksort_half(void *vv, npy_intp *tosort, npy_intp n, void *NPY_UNUSED(varr))
 {
+    if (aquicksort_dispatch((np::Half *)vv, tosort, n)) {
+        return 0;
+    }
     return aquicksort_<npy::half_tag>((npy_half *)vv, tosort, n);
 }
 NPY_NO_EXPORT int

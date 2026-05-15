@@ -114,12 +114,29 @@ void ArgInsertionSelect(T *arr, npy_intp *arg, npy_intp num, npy_intp kth)
 /*
  * ToSortableKey: Converts values to unsigned types for SIMD sorting.
  * Ensures proper ordering: negative < positive, NaNs go to end.
- * Returns uint64_t for consistency (32-bit types truncated).
+ * Returns uint64_t for consistency (16/32-bit types zero-extended).
  */
 template <typename T>
 inline uint64_t ToSortableKey(T val)
 {
-    if constexpr (std::is_same_v<T, uint32_t>) {
+    if constexpr (std::is_same_v<T, uint16_t>) {
+        return static_cast<uint64_t>(val);
+    }
+    else if constexpr (std::is_same_v<T, int16_t>) {
+        return static_cast<uint64_t>(static_cast<uint16_t>(val) ^ 0x8000U);
+    }
+    else if constexpr (std::is_same_v<T, Half>) {
+        uint16_t u = val.Bits();
+        if (val.IsNaN()) {
+            return 0xFFFFFFFFFFFFFFFFULL;
+        }
+        if (u & 0x8000U) {
+            return ~static_cast<uint64_t>(u);
+        } else {
+            return static_cast<uint64_t>(u) | 0x8000000000000000ULL;
+        }
+    }
+    else if constexpr (std::is_same_v<T, uint32_t>) {
         return static_cast<uint64_t>(val);
     }
     else if constexpr (std::is_same_v<T, uint64_t>) {
@@ -133,23 +150,23 @@ inline uint64_t ToSortableKey(T val)
     }
     else if constexpr (std::is_same_v<T, float>) {
         if (std::isnan(val)) {
-            return 0xFFFFFFFFFFFFFFFFULL; // NaN at end (use 64-bit max for consistency)
+            return 0xFFFFFFFFFFFFFFFFULL;
         }
         uint32_t u = BitCast<uint32_t, T>(val);
-        if (u & 0x80000000U) {            // Negative (including -0.0)
+        if (u & 0x80000000U) {
             return static_cast<uint64_t>(~u);
-        } else {                           // Non-negative (+0.0, positive, +inf)
+        } else {
             return static_cast<uint64_t>(u | 0x80000000U);
         }
     }
     else if constexpr (std::is_same_v<T, double>) {
         if (std::isnan(val)) {
-            return 0xFFFFFFFFFFFFFFFFULL; // NaN at end
+            return 0xFFFFFFFFFFFFFFFFULL;
         }
         uint64_t u = BitCast<uint64_t, T>(val);
-        if (u & 0x8000000000000000ULL) {   // Negative
+        if (u & 0x8000000000000000ULL) {
             return ~u;
-        } else {                            // Non-negative
+        } else {
             return u | 0x8000000000000000ULL;
         }
     }
@@ -239,7 +256,8 @@ void ArgQSort_Impl(T *arr, npy_intp* arg, npy_intp size)
     }
 
 #if VQSORT_ENABLED
-    if constexpr (std::is_same_v<T, int32_t> || std::is_same_v<T, uint32_t> || std::is_same_v<T, float>) {
+    if constexpr (std::is_same_v<T, int16_t> || std::is_same_v<T, uint16_t> || std::is_same_v<T, Half> ||
+                  std::is_same_v<T, int32_t> || std::is_same_v<T, uint32_t> || std::is_same_v<T, float>) {
         // Use std::vector for RAII memory management
         std::vector<hwy::K32V32> pairs(size);
         for (npy_intp i = 0; i < size; ++i) {
@@ -283,7 +301,8 @@ void ArgQSelect_Impl(T *arr, npy_intp* arg, npy_intp num, npy_intp kth)
     }
 
 #if VQSORT_ENABLED
-    if constexpr (std::is_same_v<T, int32_t> || std::is_same_v<T, uint32_t> || std::is_same_v<T, float>) {
+    if constexpr (std::is_same_v<T, int16_t> || std::is_same_v<T, uint16_t> || std::is_same_v<T, Half> ||
+                  std::is_same_v<T, int32_t> || std::is_same_v<T, uint32_t> || std::is_same_v<T, float>) {
         std::vector<hwy::K32V32> pairs(num);
         for (npy_intp i = 0; i < num; ++i) {
             pairs[i].key = static_cast<uint32_t>(ToSortableKey(arr[i]));
@@ -327,6 +346,8 @@ void NPY_CPU_DISPATCH_CURFX(ArgQSort)(T *arr, npy_intp* arg, npy_intp size)
     template void NPY_CPU_DISPATCH_CURFX(ArgQSort)<TYPE>(TYPE*, npy_intp*, npy_intp); \
     template void NPY_CPU_DISPATCH_CURFX(ArgQSelect)<TYPE>(TYPE*, npy_intp*, npy_intp, npy_intp)
 
+HWAY_DISPATCH_DECLARE(int16_t);
+HWAY_DISPATCH_DECLARE(uint16_t);
 HWAY_DISPATCH_DECLARE(int32_t);
 HWAY_DISPATCH_DECLARE(uint32_t);
 HWAY_DISPATCH_DECLARE(int64_t);
@@ -334,5 +355,10 @@ HWAY_DISPATCH_DECLARE(uint64_t);
 HWAY_DISPATCH_DECLARE(float);
 HWAY_DISPATCH_DECLARE(double);
 #undef HWAY_DISPATCH_DECLARE
+
+#if HWY_HAVE_FLOAT16
+template void NPY_CPU_DISPATCH_CURFX(ArgQSort)<Half>(Half*, npy_intp*, npy_intp);
+template void NPY_CPU_DISPATCH_CURFX(ArgQSelect)<Half>(Half*, npy_intp*, npy_intp, npy_intp);
+#endif
 
 } // np::highway::qsort_simd
