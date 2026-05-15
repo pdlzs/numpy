@@ -977,6 +977,14 @@ foreach gen_mtargets : [
     ] : []
   ],
   [
+    'loops_arithm_sum_hwy.dispatch.h',
+    'src/umath/loops_arithm_sum_hwy.dispatch.cpp',
+    use_highway ? [
+      X86_V4, X86_V3, X86_V2,
+      SVE, ASIMD, NEON
+    ] : []
+  ],
+  [
     'loops_comparison.dispatch.h',
     src_file.process('src/umath/loops_comparison.dispatch.c.src'),
     [
@@ -1270,6 +1278,9 @@ src_umath = umath_gen_headers + [
   # Highway SIMD floor divide — availability check (non-dispatched)
   'src/umath/loops_arithmetic_floor_hwy_avail.c',
   'src/umath/loops_arithmetic_floor_hwy.h',
+  # Highway SIMD pairwise sum — availability check (non-dispatched)
+  'src/umath/loops_arithm_sum_hwy_avail.c',
+  'src/umath/loops_arithm_sum_hwy.h',
   # Highway SIMD complex maximum/minimum
   'src/umath/loops_complex_maxmin.dispatch.cpp',
   'src/umath/loops_complex_maxmin.h',

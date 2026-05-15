@@ -8,6 +8,8 @@
 #include "lowlevel_strided_loops.h"
 // Provides the various *_LOOP macros
 #include "fast_loop_macros.h"
+// Highway SIMD pairwise sum wrappers (callable from C)
+#include "loops_arithm_sum_hwy.h"
 
 /**
  * TODO:
@@ -51,7 +53,19 @@ NPY_NO_EXPORT void NPY_CPU_DISPATCH_CURFX(@TYPE@_@kind@)
     // reduce
     if (ssrc0 == 0 && ssrc0 == sdst && src0 == dst) {
     #if @PW@
-        *((@type@*)src0) @OP@= @TYPE@_pairwise_sum(src1, len, ssrc1);
+        /*
+         * Highway SIMD pairwise sum for contiguous arrays.
+         * When stride equals element size and Highway is available,
+         * use optimized SIMD implementation; otherwise fall back.
+         */
+        if (ssrc1 == sizeof(@type@) &&
+            npy_highway_pairwise_sum_available(sizeof(@type@))) {
+            *((@type@*)src0) @OP@= npy_highway_pairwise_sum_@sfx@_contig(
+                (const @type@*)src1, len);
+        }
+        else {
+            *((@type@*)src0) @OP@= @TYPE@_pairwise_sum(src1, len, ssrc1);
+        }
     #else
         @type@ acc = *((@type@*)src0);
         if (ssrc1 == sizeof(@type@)) {
@@ -322,7 +336,19 @@ NPY_NO_EXPORT void NPY_CPU_DISPATCH_CURFX(@TYPE@_@kind@)
     ) {
         @ftype@ *rl_im = (@ftype@ *)b_src0;
         @ftype@ rr, ri;
-        @TYPE@_pairwise_sum(&rr, &ri, b_src1, len * 2, b_ssrc1 / 2);
+        /*
+         * Highway SIMD pairwise sum for contiguous complex arrays.
+         * When stride equals complex element size and Highway available,
+         * use optimized SIMD implementation; otherwise fall back.
+         */
+        if (b_ssrc1 / 2 == sizeof(@ftype@) &&
+            npy_highway_pairwise_sum_available(sizeof(@ftype@))) {
+            npy_highway_complex_pairwise_sum_@sfx@_contig(
+                &rr, &ri, (const @ftype@*)b_src1, len * 2);
+        }
+        else {
+            @TYPE@_pairwise_sum(&rr, &ri, b_src1, len * 2, b_ssrc1 / 2);
+        }
         rl_im[0] @OP@= rr;
         rl_im[1] @OP@= ri;
         return;
