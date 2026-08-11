@@ -2549,6 +2549,20 @@ class TestRegression:
         expected = np.ones(size, dtype=np.bool)
         assert_array_equal(np.logical_and(a, b), expected)
 
+    def test_nonbool_logical_reduce(self):
+        # Nonzero bool bit patterns must remain true during SIMD reductions.
+        size = 100
+        nonzero = np.frombuffer(b'\x80' * size, dtype=np.bool)
+        mixed = np.frombuffer(b'\x80' * (size - 1) + b'\x00', dtype=np.bool)
+        zero = np.frombuffer(b'\x00' * size, dtype=np.bool)
+
+        assert np.logical_and.reduce(nonzero)
+        assert np.logical_or.reduce(nonzero)
+        assert not np.logical_and.reduce(mixed)
+        assert np.logical_or.reduce(mixed)
+        assert not np.logical_and.reduce(zero)
+        assert not np.logical_or.reduce(zero)
+
     def test_gh_23737(self):
         with pytest.raises(TypeError, match="not an acceptable base type"):
             class Y(np.flexible):
