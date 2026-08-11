@@ -63,12 +63,14 @@ HWY_INLINE HWY_ATTR Vec<uint8_t> simd_logical_or_u8(Vec<uint8_t> a, Vec<uint8_t>
 
 HWY_INLINE HWY_ATTR bool simd_any_u8(Vec<uint8_t> v)
 {
-    return hn::ReduceMax(_Tag<uint8_t>(), v) != 0;
+    const auto d = _Tag<uint8_t>();
+    return !hn::AllTrue(d, hn::Eq(v, Zero<uint8_t>()));
 }
 
 HWY_INLINE HWY_ATTR bool simd_all_u8(Vec<uint8_t> v)
 {
-    return hn::ReduceMin(_Tag<uint8_t>(), v) != 0;
+    const auto d = _Tag<uint8_t>();
+    return hn::AllFalse(d, hn::Eq(v, Zero<uint8_t>()));
 }
 #endif
 
