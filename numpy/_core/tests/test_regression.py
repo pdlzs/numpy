@@ -2563,6 +2563,33 @@ class TestRegression:
         assert not np.logical_and.reduce(zero)
         assert not np.logical_or.reduce(zero)
 
+    def test_nonbool_logical_reduce_tree(self):
+        # Enter the eight-vector reduction loop even with 512-bit vectors.
+        size = 1024
+
+        # A bitwise AND tree would turn these disjoint true bit patterns into
+        # zero.  Both patterns must instead remain logically true.
+        nonzero_bytes = bytearray(
+            b'\x01' * 64 + b'\x80' * (size - 64)
+        )
+        nonzero = np.frombuffer(nonzero_bytes, dtype=np.bool)
+
+        # Put decisive values inside the first unrolled block and SIMD vector.
+        mixed_bytes = bytearray(nonzero_bytes)
+        mixed_bytes[9] = 0
+        mixed = np.frombuffer(mixed_bytes, dtype=np.bool)
+
+        single_bytes = bytearray(size)
+        single_bytes[9] = 0x80
+        single = np.frombuffer(single_bytes, dtype=np.bool)
+
+        assert np.logical_and.reduce(nonzero)
+        assert np.logical_or.reduce(nonzero)
+        assert not np.logical_and.reduce(mixed)
+        assert np.logical_or.reduce(mixed)
+        assert not np.logical_and.reduce(single)
+        assert np.logical_or.reduce(single)
+
     def test_gh_23737(self):
         with pytest.raises(TypeError, match="not an acceptable base type"):
             class Y(np.flexible):
